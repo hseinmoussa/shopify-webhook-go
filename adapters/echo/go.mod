@@ -3,7 +3,7 @@ module github.com/hseinmoussa/shopify-webhook-go/adapters/echo
 go 1.24.2
 
 require (
-	github.com/hseinmoussa/shopify-webhook-go v0.0.0
+	github.com/hseinmoussa/shopify-webhook-go v0.1.0
 	github.com/labstack/echo/v4 v4.13.3
 )
 
@@ -18,5 +18,3 @@ require (
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 )
-
-replace github.com/hseinmoussa/shopify-webhook-go => ../..
