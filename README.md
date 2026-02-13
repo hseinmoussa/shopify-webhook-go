@@ -1,6 +1,11 @@
 # shopify-webhook-go
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/hseinmoussa/shopify-webhook-go.svg)](https://pkg.go.dev/github.com/hseinmoussa/shopify-webhook-go)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Production-ready Shopify webhook handling for Go. Verify signatures, route by topic, process async, deduplicate, and handle GDPR compliance — with zero external dependencies.
+
+**Requires Go 1.21+**
 
 ## Why
 
@@ -50,6 +55,8 @@ func main() {
 ### HMAC-SHA256 Verification
 
 Reads the raw body before any parsing (solving the common "parsed body breaks HMAC" bug), verifies with constant-time comparison.
+
+> **Note:** The `secret` is your Shopify app's **client secret** (found in app settings under "Client credentials"), not the access token.
 
 ```go
 // As middleware (composable with any router)
