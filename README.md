@@ -228,6 +228,69 @@ func TestOrderWebhook(t *testing.T) {
 }
 ```
 
+## Testing
+
+### Unit tests
+
+```bash
+go test ./... -v
+```
+
+### Manual testing with curl
+
+Start the example server:
+
+```bash
+SHOPIFY_WEBHOOK_SECRET=test-secret go run ./examples/basic
+```
+
+Send a signed webhook:
+
+```bash
+SECRET="test-secret"
+BODY='{"id":1,"order_number":1001,"email":"customer@example.com","total_price":"99.99","currency":"USD"}'
+SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -binary | base64)
+
+curl -X POST http://localhost:8080/webhooks \
+  -H "Content-Type: application/json" \
+  -H "X-Shopify-Topic: orders/create" \
+  -H "X-Shopify-Hmac-Sha256: $SIG" \
+  -H "X-Shopify-Shop-Domain: test.myshopify.com" \
+  -H "X-Shopify-Event-Id: test-event-1" \
+  -H "X-Shopify-Webhook-Id: wh-1" \
+  -H "X-Shopify-Triggered-At: 2025-01-01T00:00:00Z" \
+  -H "X-Shopify-Api-Version: 2025-01" \
+  -d "$BODY"
+```
+
+### Live testing with a Shopify store
+
+1. Start the server with your app's **client secret**:
+   ```bash
+   SHOPIFY_WEBHOOK_SECRET=<your-client-secret> go run ./examples/basic
+   ```
+
+2. Expose it with [ngrok](https://ngrok.com):
+   ```bash
+   ngrok http 8080
+   ```
+
+3. Register a webhook on your store (replace placeholders):
+   ```bash
+   curl -X POST "https://YOUR-STORE.myshopify.com/admin/api/2025-01/webhooks.json" \
+     -H "X-Shopify-Access-Token: YOUR_ACCESS_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"webhook":{"topic":"orders/create","address":"https://YOUR-NGROK-URL/webhooks","format":"json"}}'
+   ```
+
+4. Create a test order in your Shopify admin. You should see it logged.
+
+5. **Clean up** when done — delete the webhook so Shopify doesn't keep hitting a dead URL:
+   ```bash
+   curl -X DELETE "https://YOUR-STORE.myshopify.com/admin/api/2025-01/webhooks/WEBHOOK_ID.json" \
+     -H "X-Shopify-Access-Token: YOUR_ACCESS_TOKEN"
+   ```
+
 ## Design Decisions
 
 | Decision | Choice | Why |
