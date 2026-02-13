@@ -1,18 +1,237 @@
-### Hey, I'm Hussein 👋
+# shopify-webhook-go
 
-Senior Backend Engineer at [Quiqup](https://quiqup.com) — building e-commerce and logistics systems that power 1,000+ online stores.
+Production-ready Shopify webhook handling for Go. Verify signatures, route by topic, process async, deduplicate, and handle GDPR compliance — with zero external dependencies.
 
-#### What I work with
+## Why
 
-- **Languages:** Go, Elixir/Phoenix
-- **Architecture:** Microservices, CQRS, Event Sourcing
-- **Infrastructure:** Temporal workflows, Kafka, PostgreSQL, Redis
-- **Integrations:** Shopify, WooCommerce, custom e-commerce platforms
+Every Go developer building Shopify integrations re-implements the same things: HMAC verification, raw body parsing, deduplication, async processing to beat Shopify's 5-second timeout. This library handles all of it.
 
-#### What I do
+## Install
 
-I design and build backend systems for last-mile delivery and e-commerce fulfillment — order orchestration, real-time tracking, webhook processing, and multi-tenant integrations at scale.
+```bash
+go get github.com/hseinmoussa/shopify-webhook-go
+```
 
-#### Get in touch
+## Quick Start
 
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/hussein-hassan-moussa)
+```go
+package main
+
+import (
+    "log"
+    "net/http"
+    "os"
+
+    sw "github.com/hseinmoussa/shopify-webhook-go"
+)
+
+func main() {
+    secret := os.Getenv("SHOPIFY_WEBHOOK_SECRET")
+
+    router := sw.NewRouter()
+
+    router.Handle(sw.TopicOrdersCreate, func(event sw.Event) error {
+        var order sw.Order
+        if err := event.Unmarshal(&order); err != nil {
+            return err
+        }
+        log.Printf("New order #%d from %s — %s", order.OrderNumber, order.Email, order.TotalPrice)
+        return nil
+    })
+
+    handler := sw.Handler(secret, router)
+    http.Handle("/webhooks", handler)
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
+```
+
+## Features
+
+### HMAC-SHA256 Verification
+
+Reads the raw body before any parsing (solving the common "parsed body breaks HMAC" bug), verifies with constant-time comparison.
+
+```go
+// As middleware (composable with any router)
+mux.Handle("/webhooks", sw.Middleware(secret)(yourHandler))
+
+// Or use the all-in-one Handler
+mux.Handle("/webhooks", sw.Handler(secret, router))
+
+// Or verify manually
+body, err := sw.VerifyRequest(secret, r)
+```
+
+### Topic-Based Routing
+
+Register handlers by Shopify webhook topic. Type constants for all standard topics.
+
+```go
+router := sw.NewRouter(
+    sw.WithErrorHandler(func(event sw.Event, err error) {
+        log.Printf("[%s] error: %v", event.Metadata.Topic, err)
+    }),
+)
+
+router.Handle(sw.TopicOrdersCreate, handleNewOrder)
+router.Handle(sw.TopicProductsUpdate, handleProductUpdate)
+router.Handle(sw.TopicRefundsCreate, handleRefund)
+
+// Catch-all for unregistered topics
+router.Fallback(func(event sw.Event) error {
+    log.Printf("unhandled topic: %s", event.Metadata.Topic)
+    return nil
+})
+```
+
+### Async Processing
+
+Shopify drops webhooks that don't respond within 5 seconds. The `Handler` responds 200 immediately and processes in the background via a worker pool.
+
+```go
+pool := sw.NewWorkerPool(10, 1000,
+    sw.WithPoolErrorHandler(func(event sw.Event, err error) {
+        log.Printf("worker error: %v", err)
+    }),
+)
+defer pool.Shutdown(context.Background())
+
+handler := sw.Handler(secret, router,
+    sw.WithAsyncProcessor(pool),
+)
+```
+
+Implement `AsyncProcessor` to use your own queue (SQS, Kafka, Redis, etc.):
+
+```go
+type AsyncProcessor interface {
+    Submit(event Event, router *Router)
+    Shutdown(ctx context.Context) error
+}
+```
+
+### Idempotency / Deduplication
+
+Shopify can send the same webhook multiple times. Deduplicate using `X-Shopify-Event-Id`.
+
+```go
+store := sw.NewMemoryStore(24 * time.Hour) // In-memory, single instance
+defer store.Close()
+
+handler := sw.Handler(secret, router,
+    sw.WithIdempotencyStore(store),
+)
+```
+
+Implement `IdempotencyStore` for distributed deployments:
+
+```go
+type IdempotencyStore interface {
+    Exists(ctx context.Context, eventID string) (bool, error)
+    Store(ctx context.Context, eventID string) error
+}
+```
+
+### GDPR Mandatory Webhooks
+
+Shopify requires apps to handle three GDPR webhooks. `RegisterGDPR` enforces all three are set — panics at startup if any is nil.
+
+```go
+sw.RegisterGDPR(router, sw.GDPRHandlers{
+    OnCustomerDataRequest: func(event sw.Event, p sw.CustomerDataRequest) error {
+        // Handle data export request
+        return nil
+    },
+    OnCustomerRedact: func(event sw.Event, p sw.CustomerRedact) error {
+        // Delete customer data
+        return nil
+    },
+    OnShopRedact: func(event sw.Event, p sw.ShopRedact) error {
+        // Delete all shop data (48h after app uninstall)
+        return nil
+    },
+})
+```
+
+### Type-Safe Payloads
+
+Pre-built Go structs for common webhook topics. No more hand-rolling JSON tags.
+
+```go
+router.Handle(sw.TopicOrdersCreate, func(event sw.Event) error {
+    var order sw.Order
+    if err := event.Unmarshal(&order); err != nil {
+        return err
+    }
+    // order.LineItems, order.Customer, order.ShippingAddress, etc.
+    return nil
+})
+```
+
+Available types: `Order`, `Product`, `Customer`, `Collection`, `Cart`, `Checkout`, `Refund` and all nested types (`LineItem`, `Variant`, `Address`, `Fulfillment`, etc.)
+
+### Webhook Registration (Admin API)
+
+Manage webhook subscriptions programmatically.
+
+```go
+import "github.com/hseinmoussa/shopify-webhook-go/admin"
+
+client := admin.NewClient("mystore.myshopify.com", "shpat_xxx")
+
+webhook, err := client.Create(ctx, admin.WebhookInput{
+    Topic:   "orders/create",
+    Address: "https://myapp.com/webhooks",
+})
+```
+
+### Framework Adapters
+
+Adapters for Gin, Echo, and Chi. Each is a separate module — importing the core library never pulls in framework dependencies.
+
+```go
+// Gin
+import swgin "github.com/hseinmoussa/shopify-webhook-go/adapters/gin"
+r.POST("/webhooks", swgin.Handler(secret, router))
+
+// Echo
+import swecho "github.com/hseinmoussa/shopify-webhook-go/adapters/echo"
+e.POST("/webhooks", swecho.Handler(secret, router))
+
+// Chi (uses standard net/http, thinnest wrapper)
+import swchi "github.com/hseinmoussa/shopify-webhook-go/adapters/chi"
+r.With(swchi.Middleware(secret)).Post("/webhooks", yourHandler)
+```
+
+### Test Helpers
+
+Generate properly signed test requests for your webhook handlers.
+
+```go
+import "github.com/hseinmoussa/shopify-webhook-go/testutil"
+
+func TestOrderWebhook(t *testing.T) {
+    order := sw.Order{ID: 123, Email: "test@example.com", TotalPrice: "99.99"}
+    req := testutil.NewTypedRequest("test-secret", sw.TopicOrdersCreate, "test.myshopify.com", order)
+
+    rr := httptest.NewRecorder()
+    handler.ServeHTTP(rr, req)
+
+    assert.Equal(t, 200, rr.Code)
+}
+```
+
+## Design Decisions
+
+| Decision | Choice | Why |
+|---|---|---|
+| Dependencies | Zero (stdlib only) | Framework adapters are separate modules |
+| Money fields | `string` | Matches Shopify's JSON; avoids decimal library dep |
+| Async default | Respond 200 immediately | Shopify's 5-second timeout |
+| Queue full | Drop + error callback | Never block HTTP; Shopify retries |
+| Dedup interface | 2 methods (`Exists`/`Store`) | Easy to implement for Redis, Postgres, DynamoDB |
+| GDPR | Panics on nil handler | Catches missing mandatory webhooks at startup |
+
+## License
+
+MIT
