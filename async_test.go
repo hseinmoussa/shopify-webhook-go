@@ -90,6 +90,95 @@ func TestWorkerPool_ShutdownTimeout(t *testing.T) {
 	}
 }
 
+func TestWorkerPool_RetriesOnFailure(t *testing.T) {
+	var attempts atomic.Int32
+
+	router := NewRouter()
+	router.Handle(TopicOrdersCreate, func(event Event) error {
+		n := attempts.Add(1)
+		if n < 3 {
+			return errors.New("transient failure")
+		}
+		return nil // Succeeds on 3rd attempt.
+	})
+
+	pool := NewWorkerPool(1, 100,
+		WithMaxRetries(3),
+		WithRetryBaseDelay(10*time.Millisecond),
+	)
+
+	pool.Submit(Event{
+		Metadata: Metadata{Topic: TopicOrdersCreate},
+		RawBody:  []byte(`{}`),
+	}, router)
+
+	_ = pool.Shutdown(context.Background())
+
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("expected 3 attempts, got %d", got)
+	}
+}
+
+func TestWorkerPool_ExhaustsRetries(t *testing.T) {
+	var finalErr atomic.Value
+
+	router := NewRouter()
+	router.Handle(TopicOrdersCreate, func(event Event) error {
+		return errors.New("permanent failure")
+	})
+
+	pool := NewWorkerPool(1, 100,
+		WithMaxRetries(2),
+		WithRetryBaseDelay(10*time.Millisecond),
+		WithPoolErrorHandler(func(event Event, err error) {
+			if !errors.Is(err, ErrQueueFull) {
+				finalErr.Store(err)
+			}
+		}),
+	)
+
+	pool.Submit(Event{
+		Metadata: Metadata{Topic: TopicOrdersCreate},
+		RawBody:  []byte(`{}`),
+	}, router)
+
+	_ = pool.Shutdown(context.Background())
+
+	stored := finalErr.Load()
+	if stored == nil {
+		t.Fatal("expected error after retries exhausted")
+	}
+	if stored.(error).Error() != "permanent failure" {
+		t.Fatalf("unexpected error: %v", stored)
+	}
+}
+
+func TestWorkerPool_NoRetriesByDefault(t *testing.T) {
+	var errorCount atomic.Int32
+
+	router := NewRouter()
+	router.Handle(TopicOrdersCreate, func(event Event) error {
+		return errors.New("fail")
+	})
+
+	pool := NewWorkerPool(1, 100,
+		WithPoolErrorHandler(func(event Event, err error) {
+			errorCount.Add(1)
+		}),
+	)
+
+	pool.Submit(Event{
+		Metadata: Metadata{Topic: TopicOrdersCreate},
+		RawBody:  []byte(`{}`),
+	}, router)
+
+	_ = pool.Shutdown(context.Background())
+
+	if got := errorCount.Load(); got != 1 {
+		t.Fatalf("expected 1 error (no retries), got %d", got)
+	}
+}
+
 func TestWorkerPool_HandlerErrors(t *testing.T) {
 	var capturedErr atomic.Value
 

@@ -100,6 +100,8 @@ pool := sw.NewWorkerPool(10, 1000,
     sw.WithPoolErrorHandler(func(event sw.Event, err error) {
         log.Printf("worker error: %v", err)
     }),
+    sw.WithMaxRetries(3),                    // Retry failed events up to 3 times
+    sw.WithRetryBaseDelay(500*time.Millisecond), // Exponential backoff: 500ms, 1s, 2s
 )
 defer pool.Shutdown(context.Background())
 
@@ -107,6 +109,8 @@ handler := sw.Handler(secret, router,
     sw.WithAsyncProcessor(pool),
 )
 ```
+
+By default, failed events are reported to the error handler and discarded (no retries). Enable retries with `WithMaxRetries` — failed events are retried inline with exponential backoff before being reported to the error handler.
 
 Implement `AsyncProcessor` to use your own queue (SQS, Kafka, Redis, etc.):
 
