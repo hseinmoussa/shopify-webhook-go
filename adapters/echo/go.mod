@@ -3,7 +3,7 @@ module github.com/hseinmoussa/shopify-webhook-go/adapters/echo
 go 1.24.2
 
 require (
-	github.com/hseinmoussa/shopify-webhook-go v0.1.0
+	github.com/hseinmoussa/shopify-webhook-go v0.2.0
 	github.com/labstack/echo/v4 v4.13.3
 )
 

@@ -4,7 +4,7 @@ go 1.24.2
 
 require (
 	github.com/gin-gonic/gin v1.10.0
-	github.com/hseinmoussa/shopify-webhook-go v0.1.0
+	github.com/hseinmoussa/shopify-webhook-go v0.2.0
 )
 
 require (
